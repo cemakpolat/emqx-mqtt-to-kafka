@@ -1,4 +1,7 @@
 version: '3'
+volumes: 
+  grafana:
+  
 services:
   emqx-enterprise:
     image: emqx/emqx-enterprise:5.0.4
@@ -12,12 +15,14 @@ services:
       - 1883:1883
       - 18083:18083
     volumes:
-      - $PWD/emqx/cluster.hocon:/opt/emqx/data/configs/cluster.hocon
-      - $PWD/emqx/api_secret:/opt/emqx/data/api_secret
+      - ./emqx/cluster.hocon:/opt/emqx/data/configs/cluster.hocon
+      - ./emqx/api_secret:/opt/emqx/data/api_secret
     environment:
       EMQX_DASHBOARD__BOOTSTRAP_USERS_FILE: '"/opt/emqx/data/api_secret"'
     depends_on:
       - kafka
+    networks:     
+      - emqx-net  
 
   emqx-exporter:
     image: emqx/emqx-exporter
@@ -31,6 +36,8 @@ services:
     depends_on:
       emqx-enterprise:
         condition: service_healthy
+    networks:      
+      - emqx-net   
 
   mqttx-simulate:
     image: emqx/mqttx-cli:v1.9.3
@@ -39,10 +46,12 @@ services:
       - /bin/sh
       - -c
       - |
-        mqttx simulate -sc tesla -c 10 -h emqx-enterprise
+        mqttx simulate -sc tesla -c 20 -h emqx-enterprise
     depends_on:
       emqx-enterprise:
         condition: service_healthy
+    networks:      
+      - emqx-net   
 
   mqttx:
     image: emqx/mqttx-cli:v1.9.3
@@ -55,6 +64,8 @@ services:
     depends_on:
       emqx-enterprise:
         condition: service_healthy
+    networks:     
+      - emqx-net  
 
   prometheus:
     image: prom/prometheus
@@ -62,7 +73,9 @@ services:
     ports:
       - 9090:9090
     volumes:
-      - $PWD/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
+    networks:     
+      - emqx-net   
 
   grafana:
     image: grafana/grafana:9.3.2
@@ -72,25 +85,31 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=public
     volumes:
-      - $PWD/emqx-exporter/config/grafana-template/EMQX5-enterprise:/grafana-dashboard-emqx5-ee
-      - $PWD/grafana-provisioning/dashboard.yaml:/etc/grafana/provisioning/dashboards/dashboard.yaml
-      - $PWD/grafana-provisioning/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
-
+      - grafana:/grafana-dashboard-emqx5-ee
+      - ./grafana-provisioning/dashboard.yaml:/etc/grafana/provisioning/dashboards/dashboard.yaml
+      - ./grafana-provisioning/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
+    networks:      
+      - emqx-net   
 
   kafka:
-    image: wurstmeister/kafka:2.12-2.3.0
+    image: confluentinc/cp-kafka:5.5.3
     container_name: kafka
     ports:
-      - 9092:9092
+      - "9092:9092"
+      - "29092:29092"
     environment:
-      KAFKA_LISTENERS: INSIDE://0.0.0.0:9093,OUTSIDE://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9093,OUTSIDE://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_CREATE_TOPICS: "my-vehicles:1:1"
     depends_on:
       - zookeeper
+    networks:
+      - emqx-net
 
   zookeeper:
     image: wurstmeister/zookeeper
@@ -99,6 +118,22 @@ services:
       - 2181:2181
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    networks:      
+      - emqx-net   
+
+  kafka-consumer:
+    build:
+      context: ./consumer_app
+      dockerfile: Dockerfile
+    container_name: kafka-consumer
+    restart: on-failure
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=my-vehicles
+    networks:      
+      - emqx-net   
 
 networks:
   emqx-net:
